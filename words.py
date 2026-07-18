@@ -10,16 +10,26 @@ import csv
 import io
 import random
 import re
+import subprocess
+import sys
 from dataclasses import dataclass
+
+import boto3
+from botocore.exceptions import ClientError
+
+subprocess.call(
+    "pip install requests -t /tmp/ --no-cache-dir".split(),
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+sys.path.insert(1, "/tmp/")
 
 import requests
 
 # Characters that must be escaped in Telegram MarkdownV2.
 _MDV2_SPECIAL = r"_*[]()~`>#+-=|{}.!"
 
-_SHEET_URL_RE = re.compile(
-    r"docs\.google\.com/spreadsheets/d/(?P<id>[A-Za-z0-9_-]+)"
-)
+_SHEET_URL_RE = re.compile(r"docs\.google\.com/spreadsheets/d/(?P<id>[A-Za-z0-9_-]+)")
 _GID_RE = re.compile(r"[#?&]gid=(?P<gid>\d+)")
 
 

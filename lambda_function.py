@@ -1,6 +1,7 @@
 """Telegram vocabulary bot.
 
-Runs on your laptop via long polling. Message it:
+Runs as an AWS Lambda function exposed via a Lambda Function URL, registered
+with Telegram as a webhook (no API Gateway involved). Message it:
 
     /addfile <link> -> register YOUR word sheet (Google Sheets or CSV link)
     /words 5        -> 5 random words, word shown, translation blurred
@@ -10,15 +11,29 @@ Runs on your laptop via long polling. Message it:
 Each user registers their own sheet with /addfile; one link per user,
 a new /addfile replaces the old one.
 
-The bot token is read from the WORDBOT_TOKEN environment variable
-(loaded from a local .env file if present).
+The bot token is read from the WORDBOT_TOKEN environment variable. If
+WORDBOT_WEBHOOK_SECRET is set, incoming requests must carry a matching
+X-Telegram-Bot-Api-Secret-Token header (set the same value when calling
+setWebhook's secret_token parameter).
 """
 
 from __future__ import annotations
 
+import asyncio
+import base64
+import json
 import logging
 import os
-from pathlib import Path
+import subprocess
+import sys
+from typing import Any
+
+subprocess.call(
+    "pip install python-telegram-bot -t /tmp/ --no-cache-dir".split(),
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+)
+sys.path.insert(1, "/tmp/")
 
 from telegram import Update
 from telegram.constants import ParseMode
@@ -34,19 +49,6 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
 )
 log = logging.getLogger("wordbot")
-
-
-def _load_env() -> None:
-    """Minimal .env loader (KEY=VALUE lines) so we don't need an extra dependency."""
-    env_path = Path(__file__).with_name(".env")
-    if not env_path.exists():
-        return
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line or line.startswith("#") or "=" not in line:
-            continue
-        key, _, value = line.partition("=")
-        os.environ.setdefault(key.strip(), value.strip().strip('"').strip("'"))
 
 
 HELP_TEXT = (
@@ -148,24 +150,51 @@ def _parse_args(args: list[str]) -> tuple[int, str]:
     return count, direction
 
 
-def main() -> None:
-    _load_env()
-    token = os.environ.get("WORDBOT_TOKEN")
-    if not token:
-        raise SystemExit(
-            "WORDBOT_TOKEN is not set. Put it in wordbot/.env "
-            "(see .env.example) or export it in your shell."
-        )
-
+def _build_app(token: str) -> Application:
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", start))
     app.add_handler(CommandHandler("addfile", addfile_cmd))
     app.add_handler(CommandHandler("words", words_cmd))
-
-    log.info("Bot started. Press Ctrl+C to stop.")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    return app
 
 
-if __name__ == "__main__":
-    main()
+async def _process_update(token: str, payload: dict[str, Any]) -> None:
+    app = _build_app(token)
+    async with app:
+        update = Update.de_json(payload, app.bot)
+        await app.process_update(update)
+
+
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    """Entry point for the Lambda Function URL Telegram calls on every update."""
+    token = os.environ.get("WORDBOT_TOKEN")
+    if not token:
+        log.error("WORDBOT_TOKEN is not set")
+        return {"statusCode": 500, "body": "Server misconfigured"}
+
+    secret = os.environ.get("WORDBOT_WEBHOOK_SECRET")
+    if secret:
+        headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
+        if headers.get("x-telegram-bot-api-secret-token") != secret:
+            log.warning("Rejected webhook call with missing/invalid secret token")
+            return {"statusCode": 403, "body": "Forbidden"}
+
+    body = event.get("body") or "{}"
+    if event.get("isBase64Encoded"):
+        body = base64.b64decode(body).decode("utf-8")
+
+    try:
+        payload = json.loads(body)
+    except json.JSONDecodeError:
+        log.warning("Received non-JSON body")
+        return {"statusCode": 400, "body": "Bad Request"}
+
+    try:
+        asyncio.run(_process_update(token, payload))
+    except Exception:
+        log.exception("Failed to process update")
+        # Still return 200 so Telegram doesn't retry-storm a failing update.
+        return {"statusCode": 200, "body": "OK"}
+
+    return {"statusCode": 200, "body": "OK"}

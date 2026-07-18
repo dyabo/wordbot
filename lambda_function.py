@@ -28,12 +28,16 @@ import subprocess
 import sys
 from typing import Any
 
-subprocess.call(
-    "pip install python-telegram-bot -t /tmp/ --no-cache-dir".split(),
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
-)
-sys.path.insert(1, "/tmp/")
+try:
+    import telegram  # noqa: F401  (already bundled/installed locally)
+except ImportError:
+    subprocess.call(
+        [sys.executable, "-m", "pip", "install", "python-telegram-bot",
+         "-t", "/tmp/", "--no-cache-dir"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    sys.path.insert(1, "/tmp/")
 
 from telegram import Update
 from telegram.constants import ParseMode
@@ -44,6 +48,12 @@ import words
 
 DEFAULT_COUNT = 5
 MAX_COUNT = 30
+
+# Used for users who haven't registered their own sheet via /addfile.
+DEFAULT_SHEET_URL = (
+    "https://docs.google.com/spreadsheets/d/"
+    "1-1slGoemwSWA_7Av8lPtkYjRRmQ1UBnnYAkObd2OGL8/export?format=csv&gid=0"
+)
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
@@ -58,13 +68,8 @@ HELP_TEXT = (
     "/words N        — N random words, word shown, translation blurred\n"
     "/words N ru     — N random words, translation shown, word blurred\n"
     "/words          — 5 words\n\n"
+    "Without /addfile, a default Polish–Russian sheet is used.\n"
     "Tap the blurred text to reveal the answer."
-)
-
-NO_FILE_TEXT = (
-    "You haven't registered a word sheet yet.\n"
-    "Send /addfile <link> with your Google Sheets link "
-    "(the sheet must be viewable by anyone with the link)."
 )
 
 
@@ -114,10 +119,8 @@ async def words_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     count, direction = _parse_args(context.args)
     count = max(1, min(count, MAX_COUNT))
 
-    csv_url = storage.get_link(update.effective_user.id)
-    if not csv_url:
-        await update.message.reply_text(NO_FILE_TEXT)
-        return
+    # Fall back to the default sheet for users who never ran /addfile.
+    csv_url = storage.get_link(update.effective_user.id) or DEFAULT_SHEET_URL
 
     try:
         pairs = words.load_pairs(csv_url)

@@ -17,14 +17,17 @@ from dataclasses import dataclass
 import boto3
 from botocore.exceptions import ClientError
 
-subprocess.call(
-    "pip install requests -t /tmp/ --no-cache-dir".split(),
-    stdout=subprocess.DEVNULL,
-    stderr=subprocess.DEVNULL,
-)
-sys.path.insert(1, "/tmp/")
-
-import requests
+try:
+    import requests
+except ImportError:
+    subprocess.call(
+        [sys.executable, "-m", "pip", "install", "requests",
+         "-t", "/tmp/", "--no-cache-dir"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    sys.path.insert(1, "/tmp/")
+    import requests
 
 # Characters that must be escaped in Telegram MarkdownV2.
 _MDV2_SPECIAL = r"_*[]()~`>#+-=|{}.!"

@@ -14,9 +14,6 @@ import subprocess
 import sys
 from dataclasses import dataclass
 
-import boto3
-from botocore.exceptions import ClientError
-
 try:
     import requests
 except ImportError:
